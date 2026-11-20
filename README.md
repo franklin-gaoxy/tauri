@@ -39,7 +39,7 @@
 - 运行依赖 Microsoft Edge WebView2 Runtime（Windows 10/11 系统已内置；老系统可装一次离线运行时）
 - 需要把软件放到其他电脑时，直接复制整个解压后的文件夹即可
 
-发布版可在仓库的 [Releases](https://github.com/franklin-gaoxy/tauri/releases) 下载；也可以自行打包（见下文）。
+压缩包只有 `MarkdownEditor.exe` 和一份使用说明，约 4 MB。发布版请在仓库的 [Releases](https://github.com/franklin-gaoxy/tauri/releases) 下载（文件名形如 `MarkdownEditor-win64-portable.zip`）；也可以自行打包（见下文）。
 
 ## 技术栈
 
