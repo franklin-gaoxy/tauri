@@ -27,6 +27,7 @@ dist-ssr
 src-tauri/target
 src-tauri/gen/schemas
 
-# 打包产物
+# 打包产物与下载缓存
 release/
 *.zip
+.cache/

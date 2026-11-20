@@ -30,6 +30,23 @@ interface MdNode {
 
 const asNode = (n: unknown) => n as MdNode;
 
+/** 内联 HTML 标签 → 对应样式，和 Typora 一样渲染成效果而不是显示标签 */
+const INLINE_TAG_CLASS: Record<string, string> = {
+  u: 'cm-underline',
+  b: 'cm-strong',
+  strong: 'cm-strong',
+  i: 'cm-em',
+  em: 'cm-em',
+  s: 'cm-strike',
+  del: 'cm-strike',
+  strike: 'cm-strike',
+  mark: 'cm-highlight',
+  sub: 'cm-sub',
+  sup: 'cm-sup',
+  code: 'cm-inline-code',
+  kbd: 'cm-kbd',
+};
+
 const EMPHASIS: Record<string, { mark: string; cls: string }> = {
   Emphasis: { mark: 'EmphasisMark', cls: 'cm-em' },
   StrongEmphasis: { mark: 'EmphasisMark', cls: 'cm-strong' },
@@ -493,6 +510,11 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
     const line = doc.lineAt(pos);
     return head >= line.from && head <= line.to;
   };
+  /** 只看光标/选区头在不在这行：折叠行用它，否则有选区时行被藏起来、光标会隐身 */
+  const headOn = (pos: number) => {
+    const line = doc.lineAt(pos);
+    return head >= line.from && head <= line.to;
+  };
   const hide = (from: number, to: number) => {
     if (to > from) out.push(HIDE.range(from, to));
   };
@@ -505,7 +527,13 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
   const replaced = (pos: number) =>
     blocks.some((b) => pos >= b.from && pos <= b.to && !(caretOnly && head >= b.from && head <= b.to));
 
-  for (const visible of view.visibleRanges) {
+  // 切换文档时 view 还没测量，visibleRanges 为空；此时按整篇构建，
+  // 否则首屏会一直保持源码模样，直到用户点一下编辑器才渲染
+  const ranges = view.visibleRanges.length ? view.visibleRanges : [{ from: 0, to: doc.length }];
+  /** 已由语法树 / 其它规则处理过的区间，宽松强调回退时要避开，避免重复或重叠装饰 */
+  const protectedSpans: Array<{ from: number; to: number }> = [];
+  const isProtected = (pos: number) => protectedSpans.some((s) => pos >= s.from && pos < s.to);
+  for (const visible of ranges) {
     tree.iterate({
       from: visible.from,
       to: visible.to,
@@ -536,6 +564,7 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
           const last = node.lastChild;
           const innerFrom = isEmphasisMark(first, em.mark) ? first!.to : ref.from;
           const innerTo = isEmphasisMark(last, em.mark) ? last!.from : ref.to;
+          protectedSpans.push({ from: ref.from, to: ref.to });
           mark(innerFrom, innerTo, em.cls);
           if (!active(ref.from)) {
             if (isEmphasisMark(first, em.mark)) hide(first!.from, first!.to);
@@ -550,6 +579,7 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
           const last = node.lastChild;
           const innerFrom = first && first.name === 'CodeMark' ? first.to : ref.from;
           const innerTo = last && last.name === 'CodeMark' ? last.from : ref.to;
+          protectedSpans.push({ from: ref.from, to: ref.to });
           mark(innerFrom, innerTo, 'cm-inline-code');
           if (!active(ref.from)) {
             if (first && first.name === 'CodeMark') hide(first.from, first.to);
@@ -569,6 +599,7 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
             else text.push(c);
           }
           const url = urls.length ? doc.sliceString(urls[0].from, urls[0].to) : '';
+          protectedSpans.push({ from: ref.from, to: ref.to });
           const textFrom = text.length ? text[0].from : ref.from;
           const textTo = text.length ? text[text.length - 1].to : ref.to;
           const label = doc.sliceString(textFrom, textTo) || url;
@@ -606,36 +637,59 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
           // 代码体行（围栏之间），只给代码体加背景和圆角
           const openLine = marks.length > 0 ? doc.lineAt(marks[0].from) : null;
           const closeLine = marks.length > 1 ? doc.lineAt(marks[marks.length - 1].from) : null;
-          const firstBody = openLine ? openLine.number + 1 : doc.lineAt(ref.from).number;
-          const lastBody = closeLine ? closeLine.number - 1 : doc.lines;
+          // 光标停在围栏行上：保持源码模样，才能接着敲语言（Typora 的围栏可编辑）
+          const caretOnOpen = !!openLine && headOn(openLine.from);
+          const caretOnClose = !!closeLine && headOn(closeLine.from);
+          let firstBody = openLine ? openLine.number + 1 : doc.lineAt(ref.from).number;
+          // 没有结束围栏时：围栏块会一直吃到文档末尾，但缩进代码块（4 空格）
+          // 的范围就是节点自己，否则后面整篇文档都会被涂成代码框
+          let lastBody = closeLine
+            ? closeLine.number - 1
+            : openLine
+              ? doc.lines
+              : doc.lineAt(ref.to > ref.from ? ref.to - 1 : ref.to).number;
+          // ``` 紧跟 ``` 的空代码块：把结束围栏当成空的正文行，否则整块无处挂载。
+          // 但光标还在开围栏行上时就别这么做，否则空盒子会挂到光标下面去
+          const emptyBox = lastBody < firstBody && !!closeLine && !caretOnOpen;
+          if (emptyBox) firstBody = lastBody = closeLine!.number;
+          const hasBody = lastBody >= firstBody;
 
-          if (lastBody >= firstBody) {
-            for (let n = firstBody; n <= lastBody; n++) {
-              const ln = doc.line(n);
-              const cls = `cm-codeblock${n === firstBody ? ' cm-cb-first' : ''}${
-                n === lastBody ? ' cm-cb-last' : ''
-              }`;
-              out.push(Decoration.line({ class: cls }).range(ln.from));
+          for (let n = firstBody; n <= lastBody; n++) {
+            const ln = doc.line(n);
+            const cls = `cm-codeblock${n === firstBody ? ' cm-cb-first' : ''}${
+              n === lastBody ? ' cm-cb-last' : ''
+            }`;
+            out.push(Decoration.line({ class: cls }).range(ln.from));
+          }
+
+          // 围栏行：光标不在这一行时整行折叠成高度 0 并藏掉 ```；
+          // 光标停在这一行时不折叠也不藏字，露出 ``` 和语言让用户改
+          const foldFence = (line: { from: number; to: number } | null, caretHere: boolean) => {
+            if (!line || caretHere) return;
+            out.push(Decoration.line({ class: 'cm-fence-hidden' }).range(line.from));
+            hide(line.from, line.to);
+          };
+          if (openLine && hasBody) foldFence(openLine, caretOnOpen);
+          if (closeLine) {
+            if (emptyBox) {
+              if (!caretOnClose) hide(closeLine.from, closeLine.to);
+            } else {
+              foldFence(closeLine, caretOnClose);
             }
           }
 
-          // 围栏行折叠：光标不在该行时整行隐藏，不再占一行
-          for (const fenceLine of [openLine, closeLine]) {
-            if (!fenceLine || lastBody < firstBody) continue;
-            // 永久折叠：改语言走右上角标签，不再因为光标落到该行而露出 ```
-            out.push(Decoration.line({ class: 'cm-fence-hidden' }).range(fenceLine.from));
-            hide(fenceLine.from, fenceLine.to);
-          }
-
-          // 右上角语言标签：围栏收起后仍能改语言
-          if (name === 'FencedCode' && lastBody >= firstBody && marks.length > 0) {
+          // 右上角语言标签：挂在“已折叠的开围栏行”末尾。
+          // 那一行光标永远不会停留（光标在上面时围栏不折叠），
+          // 所以标签绝不会和光标位置重合；重合会让 CM 把光标高度量成 0，
+          // 空代码块里就表现为“框在、框里没有竖线”
+          if (name === 'FencedCode' && openLine && !caretOnOpen && hasBody) {
             const infoFrom = infoNode ? infoNode.from : marks[0].to;
             const infoTo = infoNode ? infoNode.to : infoFrom;
             out.push(
               Decoration.widget({
                 widget: new LangBadgeWidget(view, infoText, infoFrom, infoTo),
                 side: 1,
-              }).range(doc.line(firstBody).to),
+              }).range(openLine.to),
             );
           }
           return;
@@ -698,6 +752,89 @@ function buildDecorations(view: EditorView, baseDir: string | null): DecorationS
       const to = from + m[0].length;
       if (inCode(state, from) || active(from) || replaced(from)) continue;
       out.push(Decoration.replace({ widget: new MathWidget(m[1].trim(), false) }).range(from, to));
+      protectedSpans.push({ from, to });
+    }
+
+    // 内联 HTML：<u>…</u>、<b>…</b> 之类，标签本身隐藏，内容套对应样式
+    const tagRe = /<(u|b|strong|i|em|s|del|strike|mark|sub|sup|code|kbd)>([^<\n]*?)<\/\1>/gi;
+    let tagHit: RegExpExecArray | null;
+    while ((tagHit = tagRe.exec(text))) {
+      const from = visible.from + tagHit.index;
+      const to = from + tagHit[0].length;
+      if (inCode(state, from) || replaced(from)) continue;
+      const openTo = from + tagHit[1].length + 2;
+      const closeFrom = to - tagHit[1].length - 3;
+      mark(openTo, closeFrom, INLINE_TAG_CLASS[tagHit[1].toLowerCase()]);
+      // 光标不在这一行时把标签藏起来，落在行上时露出来方便改
+      if (!active(from)) {
+        hide(from, openTo);
+        hide(closeFrom, to);
+      }
+      protectedSpans.push({ from, to });
+    }
+
+    // HTML 注释：<!-- … -->，Typora 里默认不可见，这里同样隐藏；
+    // 同时挡在宽松强调外面，避免注释里的 * 被当成强调标记
+    const commentRe = /<!--[\s\S]*?-->/g;
+    let cHit: RegExpExecArray | null;
+    while ((cHit = commentRe.exec(text))) {
+      const from = visible.from + cHit.index;
+      const to = from + cHit[0].length;
+      if (inCode(state, from) || replaced(from)) continue;
+      protectedSpans.push({ from, to });
+      if (!active(from)) out.push(HIDE.range(from, to));
+    }
+
+    // 宽松强调：CommonMark/GFM 要求闭合标记「右闭合」（前面不能是标点、后面不能紧跟文字），
+    // Typora 不这么严格。语法树没识别出来的部分，这里按成对的 * / _ 再补一层，支持嵌套。
+    const stack: Array<{ ch: string; pos: number; len: number }> = [];
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\n') {
+        stack.length = 0;
+        continue;
+      }
+      if (ch !== '*' && ch !== '_') continue;
+      if (i > 0 && text[i - 1] === '\\') continue;
+      let j = i;
+      while (j < text.length && text[j] === ch) j++;
+      const len = j - i;
+      const openFrom = visible.from + i;
+      if (inCode(state, openFrom) || replaced(openFrom) || isProtected(openFrom)) {
+        i = j - 1;
+        continue;
+      }
+
+      const top = stack[stack.length - 1];
+      const opensContentAt = top ? top.pos - visible.from + top.len : -1;
+      // 下划线不做词内强调，避免 snake_case 被误判
+      const wordEdge =
+        ch !== '_' ||
+        (!/[A-Za-z0-9]/.test(text[opensContentAt - 1] ?? '') && !/[A-Za-z0-9]/.test(text[j] ?? ''));
+      const canClose =
+        !!top &&
+        top.ch === ch &&
+        top.len === len &&
+        i > opensContentAt &&
+        !/\s/.test(text[opensContentAt] ?? '') &&
+        !/\s/.test(text[i - 1] ?? '') &&
+        wordEdge;
+
+      if (canClose) {
+        stack.pop();
+        const innerFrom = top!.pos + top!.len;
+        const innerTo = openFrom;
+        if (len >= 2) mark(innerFrom, innerTo, 'cm-strong');
+        if (len !== 2) mark(innerFrom, innerTo, 'cm-em');
+        if (!active(top!.pos)) {
+          hide(top!.pos, innerFrom);
+          hide(innerTo, openFrom + len);
+        }
+      } else if (j < text.length && !/\s/.test(text[j])) {
+        // 只把「后面紧跟非空白」的连续标记当作潜在起始，避免列表符号、乘号被误判
+        stack.push({ ch, pos: openFrom, len });
+      }
+      i = j - 1;
     }
   }
 
@@ -726,7 +863,15 @@ export function livePreview(getBaseDir: () => string | null) {
       }
       update(update: ViewUpdate) {
         activeView = update.view;
-        if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
+        // 语法树是分片解析的，后台补齐的部分也要重算，否则后半篇永远是源码
+        const treeChanged = syntaxTree(update.state) !== syntaxTree(update.startState);
+        if (
+          update.docChanged ||
+          update.selectionSet ||
+          update.viewportChanged ||
+          update.geometryChanged ||
+          treeChanged
+        ) {
           this.decorations = safeBuild(update.view, getBaseDir());
         }
       }

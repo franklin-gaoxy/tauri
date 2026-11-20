@@ -8,6 +8,8 @@
   --editor-size: 16px;
   --editor-line-height: 1.75;
   --content-width: 780px;
+  /* 代码块上下留白：围栏行折叠后仍保留这点高度，两个代码块挨着也有间距 */
+  --code-block-gap: 12px;
 
   --bg: #ffffff;
   --sidebar-bg: #f6f6f8;
@@ -20,6 +22,16 @@
   --selection: rgba(47, 111, 235, 0.16);
   --hover: rgba(0, 0, 0, 0.05);
   --code-bg: #f4f5f7;
+  /* 代码块内语法高亮（code-highlight.ts 使用） */
+  --code-keyword: #cf222e;
+  --code-string: #0a3069;
+  --code-number: #0550ae;
+  --code-comment: #6e7781;
+  --code-function: #8250df;
+  --code-type: #953800;
+  --code-property: #0550ae;
+  --code-tag: #116329;
+  --code-punct: #57606a;
   --quote-border: #dcdfe4;
   --shadow: 0 12px 32px rgba(15, 18, 25, 0.12);
 }
@@ -36,6 +48,15 @@
   --selection: rgba(106, 161, 255, 0.24);
   --hover: rgba(255, 255, 255, 0.07);
   --code-bg: #232529;
+  --code-keyword: #ff7b72;
+  --code-string: #a5d6ff;
+  --code-number: #79c0ff;
+  --code-comment: #8b949e;
+  --code-function: #d2a8ff;
+  --code-type: #ffa657;
+  --code-property: #79c0ff;
+  --code-tag: #7ee787;
+  --code-punct: #8b949e;
   --quote-border: #33363c;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
@@ -598,6 +619,36 @@ button {
   color: var(--fg-muted);
 }
 
+.cm-underline {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.cm-highlight {
+  background: rgba(255, 214, 64, 0.35);
+  border-radius: 3px;
+}
+
+.cm-sub {
+  font-size: 0.8em;
+  vertical-align: sub;
+}
+
+.cm-sup {
+  font-size: 0.8em;
+  vertical-align: super;
+}
+
+.cm-kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.36em;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+
 .cm-link {
   color: var(--accent);
   text-decoration: none;
@@ -636,7 +687,18 @@ button {
   position: relative;
 }
 
+/* 语言标签的锚点：必须零尺寸且留在文档流里，
+   否则光标会被算到标签的位置（右上角）。
+   标签挂在折叠的围栏行上，那一行光标永远不会停留，所以不会和光标重合 */
+.cm-lang-anchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
 .cm-lang-badge {
+  pointer-events: auto;
   position: absolute;
   right: 10px;
   top: 2px;
@@ -722,14 +784,23 @@ button {
 }
 
 /* 围栏行折叠：源码隐藏后不留空行 */
+/* 折叠后的围栏行：不显示文字，但保留一点高度当代码块的外边距，
+   否则两个代码块挨在一起时完全贴住 */
 .cm-line.cm-fence-hidden {
-  height: 0;
+  height: var(--code-block-gap);
   line-height: 0;
   font-size: 0;
   padding-top: 0;
   padding-bottom: 0;
-  overflow: hidden;
+  /* 不能 hidden：语言标签挂在围栏行上，靠溢出显示在代码框右上角 */
+  overflow: visible;
   background: transparent;
+}
+
+/* 标签挂在开围栏行末尾，那行的底部就是代码框顶边，
+   所以往下偏移 gap 才能落进框内右上角 */
+.cm-fence-hidden .cm-lang-badge {
+  top: calc(var(--code-block-gap) + 2px);
 }
 
 .cm-line.cm-quote {

@@ -1,8 +1,9 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// 目录树节点，直接序列化给前端
+/// 目录树节点，直接序列化给前端（字段名转成 camelCase，前端按 isDir 判断目录）
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Node {
     pub name: String,
     pub path: String,
@@ -23,7 +24,8 @@ fn is_doc(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn walk(dir: &Path, depth: usize, max_depth: usize) -> Vec<Node> {
+/// 只读取一层：目录展开时再按需请求下一层，避免打开磁盘根目录时递归扫描整个盘
+fn read_level(dir: &Path) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
     let Ok(read) = std::fs::read_dir(dir) else {
         return out;
@@ -41,16 +43,12 @@ fn walk(dir: &Path, depth: usize, max_depth: usize) -> Vec<Node> {
             if SKIP_DIR.contains(&name.as_str()) {
                 continue;
             }
-            let children = if depth < max_depth {
-                walk(&path, depth + 1, max_depth)
-            } else {
-                Vec::new()
-            };
             out.push(Node {
                 name,
                 path: path.to_string_lossy().to_string(),
                 is_dir: true,
-                children: Some(children),
+                // None 表示尚未加载子项，前端展开时再请求
+                children: None,
             });
         } else if meta.is_file() && is_doc(&path) {
             out.push(Node {
@@ -71,14 +69,29 @@ fn walk(dir: &Path, depth: usize, max_depth: usize) -> Vec<Node> {
     out
 }
 
-/// 读取指定目录下（含子目录）的 markdown 文件树
+/// Windows 里 "D:" 表示“D 盘当前目录”（即进程工作目录），不是盘符根目录。
+/// 直接 read_dir 会读到 cargo 的 target\debug 这类目录，必须补成 "D:\"。
+fn resolve_dir(raw: &str) -> PathBuf {
+    let s = raw.trim();
+    let b = s.as_bytes();
+    if b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return PathBuf::from(format!("{s}\\"));
+    }
+    PathBuf::from(s)
+}
+
+/// 读取目录的一层内容；展开子目录时前端再次调用
 #[tauri::command]
-pub fn list_tree(root: String, max_depth: Option<usize>) -> Result<Vec<Node>, String> {
-    let p = PathBuf::from(&root);
+pub fn list_tree(root: String) -> Result<Vec<Node>, String> {
+    let p = resolve_dir(&root);
+    // 相对路径会解析到工作目录，属于调用方传错了，直接报错而不是悄悄列出别处的内容
+    if !p.is_absolute() {
+        return Err(format!("需要绝对路径: {root}"));
+    }
     if !p.is_dir() {
         return Err(format!("不是有效目录: {root}"));
     }
-    Ok(walk(&p, 0, max_depth.unwrap_or(6)))
+    Ok(read_level(&p))
 }
 
 #[tauri::command]

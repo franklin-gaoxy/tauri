@@ -86,20 +86,47 @@ export function toggleWrap(view: EditorView, open: string, close: string, placeh
     return;
   }
 
-  const from = range.from - open.length;
-  const to = range.to + close.length;
-  const wrapped =
-    from >= 0 &&
-    to <= state.doc.length &&
-    state.sliceDoc(from, range.from) === open &&
-    state.sliceDoc(range.to, to) === close;
-
-  if (wrapped) {
-    view.dispatch({
-      changes: { from, to, insert: inner },
-      selection: { anchor: from, head: from + inner.length },
-    });
-    return;
+  // 同一字符的连续标记（* / ** / ~~ / `）：按两侧连续标记的长度判断是否已生效。
+  // 否则在 `**粗**` 里选中文字点斜体会被误判成“已包裹”，把加粗拆掉。
+  if (open === close && /^(.)\1*$/.test(open)) {
+    const ch = open[0];
+    const before = state.sliceDoc(Math.max(0, range.from - 4), range.from);
+    const after = state.sliceDoc(range.to, Math.min(state.doc.length, range.to + 4));
+    let n = 0;
+    while (n < before.length && before[before.length - 1 - n] === ch) n++;
+    let m = 0;
+    while (m < after.length && after[m] === ch) m++;
+    const want = open.length;
+    if (n === m && n > 0) {
+      // 奇数个 * 表示斜体，2 个及以上表示加粗（*** 两者同时生效）
+      const on = want === 1 ? n % 2 === 1 : n >= want;
+      if (on) {
+        view.dispatch({
+          changes: [
+            { from: range.from - want, to: range.from, insert: '' },
+            { from: range.to, to: range.to + want, insert: '' },
+          ],
+          selection: { anchor: range.from - want, head: range.to - want },
+        });
+        return;
+      }
+    }
+  } else {
+    // 成对的不同标记（如 <u>…</u>）：仍按字面判断是否已包裹
+    const from = range.from - open.length;
+    const to = range.to + close.length;
+    if (
+      from >= 0 &&
+      to <= state.doc.length &&
+      state.sliceDoc(from, range.from) === open &&
+      state.sliceDoc(range.to, to) === close
+    ) {
+      view.dispatch({
+        changes: { from, to, insert: inner },
+        selection: { anchor: from, head: from + inner.length },
+      });
+      return;
+    }
   }
 
   view.dispatch({
@@ -112,7 +139,7 @@ export function clearFormat(view: EditorView) {
   const { state } = view;
   const range = state.selection.main;
   const raw = state.sliceDoc(range.from, range.to);
-  const text = raw.replace(/\*\*|__|~~|`|\*|_/g, '');
+  const text = raw.replace(/<\/?u>|\*\*|__|~~|`|\*|_/g, '');
   if (text === raw) return;
   view.dispatch({
     changes: { from: range.from, to: range.to, insert: text },

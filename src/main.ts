@@ -56,7 +56,8 @@ const ROOT_KEY = 'md-editor.root';
 
 let prefs = loadPrefs();
 let appearance = loadAppearance();
-let rootDir: string | null = prefs.startMode === 'restore' ? localStorage.getItem(ROOT_KEY) : null;
+const savedRoot = localStorage.getItem(ROOT_KEY);
+let rootDir: string | null = prefs.startMode === 'restore' && savedRoot ? normalizeDir(savedRoot) : null;
 let currentFile: string | null = null;
 let dirty = false;
 let suppress = false;
@@ -72,7 +73,16 @@ let zoom = prefs.zoom;
 
 function dirname(p: string) {
   const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
-  return i > 0 ? p.slice(0, i) : p;
+  if (i <= 0) return p;
+  const dir = p.slice(0, i);
+  // "D:\file.md" 截断后是 "D:"，它在 Windows 里表示“D 盘当前目录”而不是根目录，必须补回分隔符
+  return /^[A-Za-z]:$/.test(dir) ? `${dir}\\` : dir;
+}
+
+/** 同理：历史记录里可能存着 "D:"，直接当目录用会读到进程工作目录（cargo 的 target\debug） */
+function normalizeDir(p: string) {
+  const s = p.trim();
+  return /^[A-Za-z]:$/.test(s) ? `${s}\\` : s;
 }
 
 function basename(p: string) {
@@ -192,6 +202,7 @@ async function openFile(path: string) {
   els.welcome.hidden = true;
   setTitle();
   updateWordCount();
+  await sidebar?.expandPath(dirname(path));
   sidebar?.setActiveFile(path);
   refreshOutline();
   sidebar?.setActiveHeading(1);
@@ -206,8 +217,9 @@ async function createNewFile(dir: string) {
   const path = `${dir.replace(/[\\/]$/, '')}/${fileName}`;
   try {
     await createFile(path);
-    sidebar?.expandPath(dir);
+    // 先刷新树，再在新树上按层展开目录
     await refreshTree();
+    await sidebar?.expandPath(dir);
     await openFile(path);
   } catch (err) {
     toast(`新建失败：${String(err)}`);
@@ -216,7 +228,7 @@ async function createNewFile(dir: string) {
 
 async function newFile() {
   if (!rootDir) {
-    const dir = await pickFolder();
+    const dir = normalizeDir((await pickFolder()) ?? '');
     if (!dir) return;
     rootDir = dir;
     if (loadPrefs().recordHistory) localStorage.setItem(ROOT_KEY, dir);
@@ -234,21 +246,33 @@ async function refreshTree() {
   }
 }
 
-/** 打开单个文件：把它所在目录作为当前目录，左侧树随之切换 */
+// 窗口重新获得焦点时刷新树：外部新建/删除文件后不用手动操作
+let treeTimer = 0;
+function scheduleTreeRefresh() {
+  if (!rootDir) return;
+  window.clearTimeout(treeTimer);
+  treeTimer = window.setTimeout(() => void refreshTree(), 300);
+}
+window.addEventListener('focus', scheduleTreeRefresh);
+
+/** 打开单个文件：把它所在目录作为当前目录，并强制刷新左侧树 */
 async function openSingleFile() {
   const file = await pickFile();
   if (!file) return;
-  const dir = dirname(file);
-  if (dir !== rootDir) {
+  const dir = normalizeDir(dirname(file));
+  const changed = dir !== rootDir;
+  if (changed) {
     rootDir = dir;
     if (loadPrefs().recordHistory) localStorage.setItem(ROOT_KEY, dir);
-    await refreshTree();
   }
+  // 即使目录没变也要刷新：文件可能是刚下载/新建的，树里还是旧快照
+  await refreshTree();
+  sidebar?.showTab('files');
   await openFile(file);
 }
 
 async function openFolder() {
-  const dir = await pickFolder();
+  const dir = normalizeDir(await pickFolder() ?? '');
   if (!dir) return;
   rootDir = dir;
   if (loadPrefs().recordHistory) localStorage.setItem(ROOT_KEY, dir);

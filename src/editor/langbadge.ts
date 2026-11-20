@@ -65,6 +65,12 @@ export class LangBadgeWidget extends WidgetType {
   }
 
   toDOM() {
+    // 外层锚点必须留在文档流里且尺寸为 0：光标插到 widget 位置时，
+    // CM 按锚点的位置算坐标。锚点若自己就是 position:absolute 的标签，
+    // 光标会被画到行尾右边（右上角），在空行上尤其明显
+    const anchor = document.createElement('span');
+    anchor.className = 'cm-lang-anchor';
+
     const badge = document.createElement('span');
     badge.className = 'cm-lang-badge';
     badge.textContent = this.lang || 'text';
@@ -74,7 +80,8 @@ export class LangBadgeWidget extends WidgetType {
       e.stopPropagation();
       this.openMenu(badge);
     });
-    return badge;
+    anchor.appendChild(badge);
+    return anchor;
   }
 
   ignoreEvent() {
@@ -95,7 +102,12 @@ export class LangBadgeWidget extends WidgetType {
   private openMenu(anchor: HTMLElement) {
     const wasOpen = currentMenu !== null;
     closeMenu();
-    if (wasOpen) return; // 再点一次收起
+    if (wasOpen) {
+      // 再点一次收起：菜单的输入框会把焦点从编辑器抢走，
+      // 编辑器没有焦点时 CM 根本不画光标，必须还回去
+      this.view.focus();
+      return;
+    }
 
     const menu = document.createElement('div');
     menu.className = 'cm-lang-menu';
@@ -141,6 +153,7 @@ export class LangBadgeWidget extends WidgetType {
       } else if (e.key === 'Escape') {
         e.preventDefault();
         closeMenu();
+        this.view.focus();
       }
     });
 

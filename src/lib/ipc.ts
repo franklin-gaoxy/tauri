@@ -31,7 +31,8 @@ export async function pickFile(): Promise<string | null> {
   return typeof picked === 'string' ? picked : null;
 }
 
-export const listTree = (root: string) => invoke<FileNode[]>('list_tree', { root, maxDepth: 6 });
+/** 读取目录的一层内容；展开子目录时再调用一次 */
+export const listTree = (root: string) => invoke<FileNode[]>('list_tree', { root });
 
 export const readFile = (path: string) => invoke<string>('read_file', { path });
 

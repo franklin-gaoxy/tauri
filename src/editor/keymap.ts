@@ -6,7 +6,12 @@
  */
 import { Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
-import { closeFenceAtEndAction, exitFenceAction, type ExitAction } from './fence';
+import {
+  closeFenceAtEndAction,
+  exitFenceAction,
+  removeEmptyFenceAction,
+  type ExitAction,
+} from './fence';
 
 function applyExit(view: EditorView, action: ExitAction) {
   view.dispatch({
@@ -66,6 +71,26 @@ function clickBelowContent(event: MouseEvent, view: EditorView): boolean {
   return true;
 }
 
-export const markdownKeys = Prec.highest(keymap.of([{ key: 'ArrowDown', run: arrowDown }]));
+/** 空代码块上的退格：整块删除，避免两行围栏被拼成一行吞掉后面的内容 */
+function backspaceFence(view: EditorView): boolean {
+  const { state } = view;
+  const sel = state.selection.main;
+  if (!sel.empty) return false;
+  const action = removeEmptyFenceAction(state, sel.head);
+  if (!action) return false;
+  view.dispatch({
+    changes: { from: action.from, to: action.to, insert: '' },
+    selection: { anchor: action.anchor },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+export const markdownKeys = Prec.highest(
+  keymap.of([
+    { key: 'ArrowDown', run: arrowDown },
+    { key: 'Backspace', run: backspaceFence },
+  ]),
+);
 
 export const markdownPointer = EditorView.domEventHandlers({ mousedown: clickBelowContent });

@@ -1,4 +1,4 @@
-import type { FileNode } from '../lib/ipc';
+import { listTree, type FileNode } from '../lib/ipc';
 import type { Heading } from '../editor/outline';
 
 const CARET =
@@ -17,8 +17,8 @@ export interface SidebarHandle {
   showTab: (name: 'files' | 'outline') => void;
   /** 当前显示的是文件树还是大纲，菜单勾选状态要用 */
   currentTab: () => 'files' | 'outline';
-  /** 展开到指定目录，新建文件后用来把父级撑开 */
-  expandPath: (dir: string) => void;
+  /** 展开到指定目录（按层加载），打开或新建文件后用来定位 */
+  expandPath: (dir: string) => Promise<void>;
 }
 
 /** 路径统一成正斜杠后做键，避免 Windows 反斜杠/正斜杠混用导致展开状态失效 */
@@ -77,9 +77,16 @@ export function createSidebar(
       row.innerHTML = `<span class="caret">${CARET}</span><span class="tree-icon">${FOLDER_ICON}</span><span class="tree-label"></span>`;
       row.querySelector('.tree-label')!.textContent = node.name;
       row.addEventListener('click', () => {
-        if (expanded.has(pathKey(node.path))) expanded.delete(pathKey(node.path));
-        else expanded.add(pathKey(node.path));
-        renderFiles();
+        const key = pathKey(node.path);
+        if (expanded.has(key)) {
+          expanded.delete(key);
+          renderFiles();
+          return;
+        }
+        expanded.add(key);
+        // 子项按需加载；搜索结果是副本，要回到原树里取节点
+        const target = findNode(tree ?? [], node.path) ?? node;
+        void ensureChildren(target).then(renderFiles);
       });
     } else {
       row.innerHTML = `${SPACER}<span class="tree-icon">${FILE_ICON}</span><span class="tree-label"></span>`;
@@ -91,6 +98,45 @@ export function createSidebar(
   }
 
   let tree: FileNode[] | null = null;
+
+  /** 目录的 children 为 null 表示还没加载，展开时才请求一层 */
+  async function ensureChildren(node: FileNode) {
+    if (!node.isDir || node.children) return;
+    try {
+      node.children = await listTree(node.path);
+    } catch {
+      node.children = [];
+    }
+  }
+
+  function findNode(nodes: FileNode[], path: string): FileNode | null {
+    for (const node of nodes) {
+      if (node.path === path) return node;
+      if (node.children) {
+        const hit = findNode(node.children, path);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  /** 刷新树之后，把仍然展开的目录重新加载出来 */
+  async function hydrateExpanded() {
+    if (!tree) return;
+    let loaded = false;
+    const walk = async (nodes: FileNode[]) => {
+      for (const node of nodes) {
+        if (!node.isDir || !expanded.has(pathKey(node.path))) continue;
+        if (!node.children) {
+          await ensureChildren(node);
+          loaded = true;
+        }
+        await walk(node.children ?? []);
+      }
+    };
+    await walk(tree);
+    if (loaded) renderFiles();
+  }
 
   /** 搜索时只保留命中的文件及其父级目录 */
   function filterTree(nodes: FileNode[], q: string): FileNode[] {
@@ -115,6 +161,13 @@ export function createSidebar(
     }
   }
 
+  /** 根节点标题：盘符根目录显示 "D:\"，普通目录显示目录名 */
+  function rootLabel(dir: string) {
+    const trimmed = dir.replace(/[\\/]+$/, '');
+    const base = trimmed.slice(Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\')) + 1);
+    return base || dir;
+  }
+
   function renderFiles() {
     filesPane.textContent = '';
     if (!tree || tree.length === 0) {
@@ -132,7 +185,20 @@ export function createSidebar(
       filesPane.appendChild(empty);
       return;
     }
-    appendNodes(filesPane, shown, 0, query !== '');
+
+    // 和 Typora 一样先显示根目录，再显示其内容
+    const depth = rootDirPath ? 1 : 0;
+    if (rootDirPath) {
+      const rootNode: FileNode = {
+        name: rootLabel(rootDirPath),
+        path: rootDirPath,
+        isDir: true,
+        children: tree,
+      };
+      filesPane.appendChild(fileRow(rootNode, 0));
+      if (!expanded.has(pathKey(rootDirPath))) return;
+    }
+    appendNodes(filesPane, shown, depth, query !== '');
   }
 
   function renderOutline() {
@@ -218,16 +284,27 @@ export function createSidebar(
       rootDirPath = rootDir;
       if (rootDir) expanded.add(pathKey(rootDir));
       renderFiles();
+      // 新树里的 children 都是 null，把仍展开的目录逐层补回来
+      void hydrateExpanded();
     },
-    expandPath(dir) {
-      if (!rootDirPath) return;
+    async expandPath(dir) {
+      if (!rootDirPath || !tree) return;
       const rootKey = pathKey(rootDirPath);
       expanded.add(rootKey);
-      let acc = rootKey.replace(/\/$/, '');
-      for (const part of pathKey(dir).slice(rootKey.length).split('/').filter(Boolean)) {
+      const rootBase = rootKey.replace(/\/$/, '');
+      let nodes: FileNode[] = tree;
+      let acc = rootBase;
+      // 逐段下钻，每层只加载一层
+      for (const part of pathKey(dir).slice(rootBase.length).split('/').filter(Boolean)) {
         acc += `/${part}`;
-        expanded.add(acc);
+        const lower = acc.toLowerCase();
+        const node = nodes.find((n) => n.isDir && pathKey(n.path).toLowerCase() === lower);
+        if (!node) break;
+        expanded.add(pathKey(node.path));
+        await ensureChildren(node);
+        nodes = node.children ?? [];
       }
+      renderFiles();
     },
     setOutline(next) {
       headings = next;
@@ -236,6 +313,7 @@ export function createSidebar(
     setActiveFile(path) {
       activeFile = path;
       renderFiles();
+      filesPane.querySelector<HTMLElement>('.tree-row.active')?.scrollIntoView({ block: 'nearest' });
     },
     setActiveHeading(line) {
       const rows = Array.from(outlinePane.querySelectorAll<HTMLElement>('.outline-row'));

@@ -12,7 +12,7 @@ import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
 import { livePreview } from './livepreview';
 import { markdownKeys, markdownPointer } from './keymap';
-import { fenceCaretRedirect } from './fence';
+import { fenceGuard } from './fence';
 import { markdownWithCodeLanguages } from './code-languages';
 import { codeHighlight } from './code-highlight';
 import { insertLink, toggleWrap } from './format';
@@ -78,13 +78,8 @@ export function createEditor(opts: EditorOptions): EditorHandle {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     syntaxHighlighting(codeHighlight),
     EditorView.lineWrapping,
-    // 折叠后的围栏行不可停留，光标落上去就挪进代码体
-    EditorState.transactionFilter.of((tr) => {
-      if (tr.docChanged || !tr.selection) return tr;
-      const target = fenceCaretRedirect(tr.state, tr.selection.main.head);
-      if (target === null) return tr;
-      return [tr, { selection: { anchor: target }, sequential: true }];
-    }),
+    // 围栏输入护栏：自动补结束围栏 + 光标不留在折叠行上
+    fenceGuard(),
     markdownKeys,
     markdownPointer,
     keymap.of([
