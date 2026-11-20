@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Markdown</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="app">
+      <header class="menubar" data-tauri-drag-region>
+        <div class="menubar-left" id="menubar"></div>
+        <div class="menubar-right">
+          <span class="dirty-dot" id="dirty-dot" hidden></span>
+        </div>
+      </header>
+
+      <div class="body">
+        <aside class="sidebar" id="sidebar">
+          <div class="side-tabs">
+            <button class="side-tab active" data-tab="files">文件</button>
+            <button class="side-tab" data-tab="outline">大纲</button>
+          </div>
+          <div class="side-search">
+            <input id="side-search" type="text" placeholder="搜索" spellcheck="false" />
+          </div>
+          <div class="pane" data-pane="files"></div>
+          <div class="pane" data-pane="outline" hidden></div>
+        </aside>
+
+        <main class="editor-area">
+          <div class="editor-host" id="editor"></div>
+          <div class="welcome" id="welcome">
+            <div class="welcome-inner">
+              <h1>Markdown 编辑器</h1>
+              <p>打开一个文件夹开始写作，边写边渲染。</p>
+              <button class="btn-primary" id="btn-open-2">打开文件夹</button>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <footer class="statusbar" id="statusbar">
+        <div class="statusbar-left">
+          <button class="status-btn" id="btn-source" title="切换源码模式">&lt;/&gt;</button>
+        </div>
+        <div class="statusbar-right">
+          <span id="word-count">0 字</span>
+        </div>
+      </footer>
+    </div>
+
+    <div class="prefs" id="prefs" hidden></div>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+# 仅用于解决本机访问 crates.io 超时，不影响业务代码。
+# 如你已有全局镜像（~/.cargo/config.toml），可直接删除本文件。
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[registries.rsproxy]
+index = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true
